@@ -1,0 +1,767 @@
+---
+title: "Analyzing Global Quality of Life Through Principal Components, Discriminant Analysis, Regression, and Clustering"
+author: "Patience Heath, 
+         Yan Lin,
+         Justin Maroldi,
+         Nicole Fong"
+date: "2025-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(countrycode)
+library(dplyr)
+library(MVN)
+library(psych)
+library(ggplot2)
+library(naivebayes)
+library(caret)
+library(MASS)
+library(factoextra)
+library(corrplot)
+library(rockchalk)
+library(rsm)
+library(qPCRtools)
+library(car)
+library(olsrr)
+library(lmtest)
+library(heplots)
+library(gridExtra)
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(patchwork)
+library(dplyr)
+library(plotly)
+library(tidyr)
+library(factoextra)
+library(NbClust)
+library(cluster)
+library(fmsb)
+library(pheatmap)
+library(GGally)
+```
+
+
+## Principal Component Analysis
+
+
+
+
+```{r}
+data = read.csv("Quality_of_Life.csv")
+
+data$continent = countrycode(data$country,
+                                   origin = "country.name",
+                                   destination = "continent")
+
+data = data %>% dplyr::filter(!is.na(continent))
+
+## Organize quality of life into factors 
+
+unique(data$Quality.of.Life.Category)
+
+data$Quality.of.Life.Category = factor(data$Quality.of.Life.Category, 
+                                       levels = c("None", "Very Low","Low", "Moderate",
+                                                  "High" , "Very High"
+                                                 ))
+
+environmental_subset = data %>% dplyr::select(continent,Pollution.Value, Climate.Value)
+
+living_subset = data %>% dplyr::select(continent, Purchasing.Power.Value, Property.Price.to.Income.Value, Traffic.Commute.Time.Value)
+
+personal_subset = data %>% dplyr::select(continent, Health.Care.Value, Safety.Value)
+
+
+```
+
+
+## Exploratory Graphs: Understanding the Data Distribution
+
+In the first plot, there is no clear visual pattern separating continents. By inspection **Europe appears to have higher Health Care and Safety values** compared to other continents. The data points for the remaining continents are scattered without distinct clustering which suggest little natural separation.
+
+Examining **safety values by continent**, Europe shows a slightly higher average compared to others.
+
+For **health care values, Oceania** displays a wider range of values than other continent, while Europe again shows a slightly higher average relative to the rest. 
+
+
+```{r}
+ggplot(data = personal_subset, aes(x = Health.Care.Value, y = Safety.Value, color = continent)) +
+  geom_point()
+
+
+ggplot(data = personal_subset, aes(x = continent, y = Safety.Value)) + 
+  geom_boxplot(fill = "salmon") + theme_minimal() + ylab("Safety Value") +
+  ggtitle("Safety Value by Continent")
+
+ggplot(data = personal_subset, aes(x = continent, y = Health.Care.Value)) +
+  geom_boxplot(fill = "salmon") + theme_minimal() + ylab(" Health Care Value") + theme_minimal() +
+  ggtitle("Health Care value by Continent")
+```
+
+
+# PCA on the data 
+Now we want to explore principal component analysis to help see what variables are most significant in the data. 
+
+
+```{r}
+pca_data = numeric_data %>% dplyr::select(-continent)
+numeric.pca = prcomp(pca_data, scale = TRUE)
+summary(numeric.pca)
+```
+
+In the first principal component the most influential variables are quality of life, purchasing power, climate and health care. 
+The second principal component safety value, climate value, traffic commute, pollution value are the most influential variables. 
+The third principal component the two influential variables are cost of living , property price to income.
+We can describe the first principal component as overall livability and the second principal component as community living. We can lastly describe the last principal component as living cost. 
+
+```{r}
+numeric.pca$rotation
+```
+
+The first three PCs explain the largest proportion of variance. According to the plot and eigenvalues the first three principal components explain around 67% of the variance. 
+
+```{r}
+fviz_eig(numeric.pca, col.var = "blue")
+```
+
+```{r}
+eigen_values = get_eigenvalue(numeric.pca)
+eigen_values
+```
+
+```{r}
+var = get_pca_var(numeric.pca)
+```
+
+
+This plot tells us which variables contribute the most to their respective principal components. Quality of life contributes the most to the first principal component, Traffic commute time contributes the most to the second principal component and cost of living and property price to income contribute the most to the third principal component. This all supports the findings we discovered previously but gives a more intuitive and visual 
+
+```{r}
+corrplot(var$cos2, is.corr = FALSE)
+```
+
+Property price has the lowest cos2 value 
+Climate and Quality of living have high cos2 values which tells us that they are represented well on their principal component. 
+The rest of the variables are adequately represented.
+
+
+```{r}
+fviz_pca_var(numeric.pca, 
+             col.var = "cos2",
+             gradient.cols = c("darkorchid4", "gold", "darkorange"),#low , medium high cos2 values
+             repel = TRUE)
+```
+Another visualization of the variables that contribute most to their respective principal components.
+
+```{r}
+dim_1_contribution = fviz_contrib(numeric.pca, choice = "var", axes = 1)
+dim_2_contribution = fviz_contrib(numeric.pca, choice = "var", axes = 2)
+dim_3_contribution = fviz_contrib(numeric.pca, choice = "var", axes = 3)
+grid.arrange(dim_1_contribution, dim_2_contribution, ncol = 2)
+dim_3_contribution
+```
+
+## LDA using subsets of data we found using PCA 
+
+Using PCA we were able to find the subsets orthographically instead of grouping variables we deemed to be similar. So now lets use that knowledge and see if that improves prediction of continent.
+
+
+
+```{r}
+dim_1_data = numeric_data %>% dplyr::select(Quality.of.Life.Value, Purchasing.Power.Value, Climate.Value, Health.Care.Value, continent)
+
+dim_2_data = numeric_data %>% dplyr::select(Safety.Value, Climate.Value, continent)
+
+dim_3_data = numeric_data %>% dplyr::select(Cost.of.Living.Value,  Property.Price.to.Income.Value, continent)
+```
+
+
+## LDA on each of the subgroups found by using PCA
+
+```{r}
+PC1_lda = lda(continent ~., data = dim_1_data)
+PC2_lda = lda(continent ~., data = dim_2_data)
+PC3_lda = lda(continent ~., data = dim_3_data)
+
+
+predi_lda1 = predict(PC1_lda, dim_1_data)
+predi_lda2 = predict(PC2_lda, dim_2_data)
+predi_lda3 = predict(PC3_lda, dim_3_data)
+
+
+
+table1 = table(predi_lda1$class, dim_1_data$continent)
+table2 = table(predi_lda2$class, dim_2_data$continent)
+table3 = table(predi_lda3$class, dim_3_data$continent)
+
+
+sum(diag(table1))/ sum(table1)
+sum(diag(table2))/ sum(table2)
+sum(diag(table3))/ sum(table3)
+```
+
+
+```{r}
+set.seed(123)
+sample_indices = sample(1 :nrow(dim_1_data), 0.8 * nrow(dim_1_data))
+
+train_data = dim_1_data[sample_indices,]
+test_data = dim_1_data[-sample_indices,]
+
+PC1_lda = lda(continent ~., data = train_data)
+PC1_predict = predict(PC1_lda, newdata = test_data)
+table = table(PC1_predict$class, test_data$continent)
+accuracy_PC = sum(diag(table)) / sum(table)
+
+accuracy_PC
+
+sample_indices2 = sample(1 : nrow(numeric_data), 0.8 * nrow(numeric_data))
+train_data = dim_1_data[sample_indices2,]
+test_data = dim_1_data[-sample_indices2,]
+
+full_data_lda = lda(continent ~., data = train_data)
+
+full_predict = predict(full_data_lda, newdata = test_data)
+table = table(full_predict$class, test_data$continent)
+accuracy = sum(diag(table)) / sum(table)
+accuracy
+
+
+
+```
+
+
+## graphs 
+```{r}
+p1 = plot(PC1_predict$x[,1], PC1_predict$x[,2],
+     col = as.factor(dim_1_data$continent),
+     pch = 19,
+     xlab = "LD1", ylab = "LD2",
+     main = "LDA Projection keeping principal components in mind")
+legend("topright", legend = levels(as.factor(dim_1_data$continent)),
+       col = 1:length(unique(dim_1_data$continent)), pch = 19)
+
+p2 = plot(full_predict$x[,1], full_predict$x[,2],
+     col = as.factor(numeric_data$continent),
+     pch = 19,
+     xlab = "LD1", ylab = "LD2",
+     main = "LDA Projection")
+legend("topright", legend = levels(as.factor(numeric_data$continent)),
+       col = 1:length(unique(numeric_data$continent)), pch = 19)
+
+```
+
+## Multivariate Regression Analysis
+
+```{r, echo = FALSE}
+data <- read.csv("Quality_of_Life.csv")
+
+#Fix Quality.of.Life.Value (remove weird characters, convert to numeric)
+data$Quality.of.Life.Value <- as.numeric(gsub("[^0-9\\.]", "", data$Quality.of.Life.Value))
+
+#Fix Property.Price.to.Income.Value
+data$Property.Price.to.Income.Value <- as.numeric(as.character(data$Property.Price.to.Income.Value))
+
+summary(data$Quality.of.Life.Value)
+summary(data$Property.Price.to.Income.Value)
+
+#Remove rows where Quality.of.Life.Value is NA or 0
+data_clean <- subset(data, !is.na(Quality.of.Life.Value) & Quality.of.Life.Value > 0)
+
+colnames(data_clean)
+```
+
+## Single Response Model
+```{r}
+# Variables to use
+# Predictors:
+# Purchasing.Power.Value
+# Safety.Value
+# Health.Care.Value
+# Pollution.Value
+# Cost.of.Living.Value
+# Property.Price.to.Income.Value
+# Traffic.Commute.Time.Value
+
+# Response:
+# Quality.of.Life.Value
+
+#Fit the model
+model <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Safety.Value + Health.Care.Value + Pollution.Value + Cost.of.Living.Value + Property.Price.to.Income.Value + Traffic.Commute.Time.Value, data = data_clean)
+
+#Model summary
+summ <- summary(model)
+print(summ)
+
+ols_regress(model)
+```
+
+## Residual Analysis
+```{r}
+#Raw residuals
+raw_resid <- residuals(model)
+head(raw_resid)
+
+#Internally Studentized
+internally_studentized <- rstandard(model)
+head(internally_studentized)
+
+#Externally Studentized
+externally_studentized <- rstudent(model)
+head(externally_studentized)
+```
+
+## Prediction
+```{r}
+predict(model, newdata = data_clean[1,], interval = "confidence")
+predict(model, newdata = data_clean[1,], interval = "prediction")
+```
+
+## Plot Regression Plane: GDP vs Healthcare
+```{r}
+plotPlane(model, plotx1="Purchasing.Power.Value", plotx2="Health.Care.Value")
+contour(model, Health.Care.Value ~ Purchasing.Power.Value, at = list(Pollution.Value=mean(data_clean$Pollution.Value, na.rm=TRUE)))
+```
+
+## Plot Regression Plane: GDP vs Safety
+```{r}
+plotPlane(model, plotx1="Purchasing.Power.Value", plotx2="Safety.Value")
+contour(model, Safety.Value ~ Purchasing.Power.Value, at = list(Pollution.Value=mean(data_clean$Pollution.Value, na.rm=TRUE)))
+```
+
+## Plot Regression Plane: GDP vs Cost of Living
+```{r}
+plotPlane(model, plotx1="Purchasing.Power.Value", plotx2="Cost.of.Living.Value")
+contour(model, Cost.of.Living.Value ~ Purchasing.Power.Value, at = list(Pollution.Value=mean(data_clean$Pollution.Value, na.rm=TRUE)))
+```
+
+## Plot Regression Plane: GDP vs Property Price to Income Value
+```{r}
+plotPlane(model, plotx1="Purchasing.Power.Value", plotx2="Property.Price.to.Income.Value")
+contour(model, Property.Price.to.Income.Value ~ Purchasing.Power.Value, at = list(Pollution.Value=mean(data_clean$Pollution.Value, na.rm=TRUE)))
+```
+
+## Plot Regression Plane: GDP vs Traffic Commute Time
+```{r}
+plotPlane(model, plotx1="Purchasing.Power.Value", plotx2="Traffic.Commute.Time.Value")
+contour(model, Traffic.Commute.Time.Value ~ Purchasing.Power.Value, at = list(Pollution.Value=mean(data_clean$Pollution.Value, na.rm=TRUE)))
+```
+
+## PRESS
+```{r}
+#Manually compute PRESS
+PRESS <- sum((residuals(model) / (1 - hatvalues(model)))^2)
+PRESS
+
+#R-squared prediction
+1 - (PRESS / sum((data_clean$Quality.of.Life.Value - mean(data_clean$Quality.of.Life.Value))^2))
+
+```
+
+## Leverage and Influence
+```{r}
+leverage <- lm.influence(model)
+head(leverage)
+head(leverage$hat, n=20)
+head(leverage$coefficients, n=20)
+head(leverage$sigma, n=20)
+head(leverage$wt.res, n=20)
+
+influ <- cooks.distance(model)
+head(influ, n=20)
+```
+
+## Model Selection Criteria
+```{r}
+sse <- sum(model$residuals^2)
+sse
+
+neg2ll <- -2*logLik(model)
+neg2ll
+
+AIC(model)
+BIC(model)
+```
+
+## Stepwise Selection
+```{r}
+ols_step_forward_p(model)
+ols_step_backward_p(model)
+ols_step_both_p(model)
+```
+
+## FINAL MODEL
+```{r}
+Final_Model <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Pollution.Value + 
+                    Property.Price.to.Income.Value + Safety.Value + 
+                    Traffic.Commute.Time.Value + Health.Care.Value, data = data)
+summary(Final_Model)
+```
+
+## Homoscedasticity Test
+```{r}
+bptest(model)
+bptest(Final_Model)
+```
+
+## Autocorrelation Test
+```{r}
+durbinWatsonTest(model, alternative="two.sided")
+durbinWatsonTest(Final_Model, alternative="two.sided")
+```
+
+## Multicollinearity
+```{r}
+vif(model)
+vif(Final_Model)
+```
+
+## Nested model testing
+```{r}
+#Reduced model1 (drop Pollution.Value)
+reduced_model1 <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Safety.Value + Health.Care.Value + Cost.of.Living.Value + Property.Price.to.Income.Value + Traffic.Commute.Time.Value, data = data_clean)
+anova(reduced_model1, model, test="F")
+vif(reduced_model1)
+
+#Reduced model2 (drop Traffic.Commute.Time.Value)
+reduced_model2 <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Safety.Value + Health.Care.Value + Cost.of.Living.Value + Property.Price.to.Income.Value + Pollution.Value, data = data_clean)
+anova(reduced_model2, model, test="F")
+vif(reduced_model2)
+
+#Reduced model3 (drop Property.Price.to.Income.Value)
+reduced_model3 <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Safety.Value + Health.Care.Value + Cost.of.Living.Value + Traffic.Commute.Time.Value + Pollution.Value, data = data_clean)
+anova(reduced_model3, model, test="F")
+vif(reduced_model3)
+
+#Reduced model4 (drop Cost.of.Living.Value)
+reduced_model4 <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Safety.Value + Health.Care.Value + Property.Price.to.Income.Value + Traffic.Commute.Time.Value + Pollution.Value, data = data_clean)
+anova(reduced_model4, model, test="F")
+vif(reduced_model4)
+
+#Reduced model5 (drop Health.Care.Value)
+reduced_model5 <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Safety.Value + Cost.of.Living.Value + Property.Price.to.Income.Value + Traffic.Commute.Time.Value + Pollution.Value, data = data_clean)
+anova(reduced_model5, model, test="F")
+vif(reduced_model5)
+
+#Reduced model6 (drop Safety.Value)
+reduced_model6 <- lm(Quality.of.Life.Value ~ Purchasing.Power.Value + Health.Care.Value + Cost.of.Living.Value + Property.Price.to.Income.Value + Traffic.Commute.Time.Value + Pollution.Value, data = data_clean)
+anova(reduced_model6, model, test="F")
+vif(reduced_model6)
+
+#Reduced model7 (drop Purchasing.Power.Value)
+reduced_model7 <- lm(Quality.of.Life.Value ~ Safety.Value + Health.Care.Value + Cost.of.Living.Value + Property.Price.to.Income.Value + Traffic.Commute.Time.Value + Pollution.Value, data = data_clean)
+anova(reduced_model7, model, test="F")
+vif(reduced_model7)
+```
+
+## MANOVA
+```{r}
+data$Purchasing.Power.Category <- gsub("'", "", data$Purchasing.Power.Category)
+data$Purchasing.Power.Category <- as.factor(data$Purchasing.Power.Category)
+
+table(data$Purchasing.Power.Category)
+
+manova_model <- manova(cbind(Safety.Value, Health.Care.Value, Pollution.Value) ~ Purchasing.Power.Category, data = data)
+
+#Summary with Pillai's Trace
+summary(manova_model, test = "Pillai")
+
+#Summary of Wilk's Lambda
+summary(manova_model, test = "Wilks")
+```
+
+
+```{r, echo = FALSE}
+qualityoflife <- read.csv("Quality_of_Life.csv", header = TRUE)
+qualityofliferaw <- qualityoflife
+```
+
+# Clustering Analysis 
+
+```{r, echo = FALSE}
+#cleaning quality.of.life.value and fixing it/cleaning everything below
+df <- qualityoflife %>%
+  mutate(
+    Quality.of.Life.Value = case_when(
+      grepl(":", Quality.of.Life.Value) ~ as.numeric(gsub(".*:\\s*([0-9.]+).*", "\\1", Quality.of.Life.Value)),
+      Quality.of.Life.Value == "0.0" ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+#cleaning column names
+names(df) <- gsub("\\.", "_", tolower(names(df)))
+names(df) <- gsub("__", "_", names(df))
+
+#removing quotes inside of the variables
+df <- df %>%
+  mutate(across(ends_with("category"), 
+                ~gsub("'", "", .x)))
+
+#converting char column to numeric
+df <- df %>%
+  mutate(property_price_to_income_value = as.numeric(property_price_to_income_value))
+
+#changing none to n/a
+df <- df %>%
+  mutate(across(ends_with("category"), 
+                ~na_if(.x, "None")))
+
+#converting 0 to N/A for quality_of_life_value
+df <- df %>%
+  mutate(quality_of_life_value = replace_na(quality_of_life_value, 0))
+
+#counting the N/A
+sapply(df, function(x) sum(is.na(x)))
+glimpse(df)
+```
+
+
+## EDA 
+
+```{r}
+
+#summary for numerical values
+num_vars <- df %>% 
+  select(ends_with("_value")) %>% 
+  select(-climate_value)
+summary(num_vars)
+
+#some plots
+#top purchasing power graph (plot 1)
+top_10 <- df %>%
+  arrange(desc(purchasing_power_value)) %>%
+  head(10)
+ggplot(top_10, aes(x = reorder(country, purchasing_power_value), y = purchasing_power_value)) +
+  geom_col(fill = "lightgreen", width = 0.7) +
+  geom_text(aes(label = purchasing_power_value), hjust = -0.2, size = 3.5) +
+  coord_flip() +
+  labs(title = "Top 10 Countries by Purchasing Power", 
+       x = "", 
+       y = "Purchasing Power Index") +
+  theme_minimal()
+
+#interactive plot for purchasing power
+df_filtered <- df %>%
+  filter(purchasing_power_value > 0)
+plot_ly(df_filtered, 
+        y = ~reorder(country, purchasing_power_value), 
+        x = ~purchasing_power_value, 
+        type = 'scatter',
+        mode = 'markers',
+        marker = list(color = 'blue', size = 4),
+        hoverinfo = 'text',
+        text = ~paste("<b>", country, "</b><br>Value:", purchasing_power_value)) %>%
+  layout(
+    title = "Purchasing Power by Country - Interactive Plot",
+    xaxis = list(title = "Purchasing Power Value"),
+    yaxis = list(
+      title = "Countries",
+      showticklabels = FALSE
+    ),
+    hoverlabel = list(
+      bgcolor = "white",
+      font = list(size = 12)
+    )
+  )
+
+#correlation heatmap
+#removing climate value bc many zeros
+numeric_data <- df %>% 
+  select(ends_with("_value")) %>% 
+  select(-climate_value)
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+
+cor_df <- cor_matrix %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("var1") %>% 
+  pivot_longer(cols = -var1, names_to = "var2", values_to = "correlation")
+
+#plotting the heatmap now
+ggplot(cor_df, aes(x = var1, y = var2, fill = correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(correlation, 2)), color = "black", size = 3.5) +
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue", 
+                      midpoint = 0, limits = c(-1, 1)) +
+  labs(title = "Correlation Between Quality of Life Indicators",
+       x = "", y = "", fill = "Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#categorical graphs (health care categories)
+df %>% 
+  filter(!is.na(health_care_category)) %>% 
+  ggplot(aes(x = health_care_category, y = quality_of_life_value, fill = health_care_category)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(title = "Quality of Life by Health Care Category",
+       x = "", y = "Quality of Life Score") +
+  theme_minimal()
+
+#safety categories
+df %>% 
+  filter(!is.na(safety_category)) %>% 
+  ggplot(aes(x = safety_category, y = quality_of_life_value, fill = safety_category)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_brewer(palette = "Pastel2") +
+  labs(title = "Quality of Life by Safety Level",
+       x = "", y = "Quality of Life Score") +
+  theme_minimal()
+
+#traffic vs pollution (removed zero/na values from graph)
+df_filtered1 <- df %>%
+  filter(traffic_commute_time_value > 0, 
+         pollution_value > 0,
+         !is.na(traffic_commute_time_value),
+         !is.na(pollution_value))
+ggplot(df_filtered1, aes(x = traffic_commute_time_value, y = pollution_value)) +
+  geom_point(aes(color = traffic_commute_time_value), size = 2, alpha = 1) +
+  geom_smooth(method = "lm", color = "red", se = TRUE, fill = "lightpink") +
+  scale_color_gradient(low = "purple", high = "orange") +
+  labs(title = "Traffic Commute Time vs Pollution (Non-Zero Values)",
+       x = "Traffic Commute Time Index", 
+       y = "Pollution Index",
+       color = "Commute Time") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## Cluster Analysis 
+
+```{r}
+
+#cleaning data more before analysis
+cluster_data <- df %>%
+  select(country, ends_with("_value")) %>%
+  select(-climate_value) %>%        
+  mutate(across(-country, ~na_if(., 0))) %>%  
+  drop_na() %>%                     
+  column_to_rownames("country") %>%  
+  scale()
+
+#what is optimal number of clusters?
+fviz_nbclust(cluster_data, kmeans, method = "wss") +
+  geom_vline(xintercept = 3, linetype = 2) +
+  labs(title = "Elbow Method")
+#diminishing returns starts at 3, so we can choose 3 for the number of clusters, can also use 4 and 5 but not as optimal
+
+#k means clustering where k=3
+#set.seed() use if want consistent results
+km_res <- kmeans(cluster_data, centers = 3, nstart = 25)
+print(km_res)
+
+#visualizing the clustering algorithm results
+fviz_cluster(km_res, data = cluster_data,
+             palette = c("blue", "red", "green"),
+             geom = "point",
+             ellipse.type = "convex",
+             ggtheme = theme_minimal())
+
+#adding these clusters to the original data
+cluster_assignments <- tibble(
+  country = rownames(cluster_data),
+  cluster = as.factor(km_res$cluster)
+)
+df_clustered <- df %>%
+  right_join(cluster_assignments, by = "country") %>%
+  drop_na(cluster)
+
+#hierarchical clustering
+dist_mat <- dist(cluster_data, method = "euclidean")
+hc_res <- hclust(dist_mat, method = "ward.D2")
+fviz_dend(hc_res, k = 3, 
+          cex = 0.5,
+          k_colors = c("blue", "red", "green"),
+          color_labels_by_k = TRUE,
+          ggtheme = theme_minimal())
+
+#descriptions of the clusters
+cluster_descriptions <- df_clustered %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(
+    n_countries = n(),
+    across(ends_with("_value"), 
+           list(mean = mean, sd = sd), 
+           na.rm = TRUE, .names = "{.col}_{.fn}")
+  ) %>%
+  as.data.frame()
+print(cluster_descriptions)
+
+#parallel coordinate plot for clusters
+cleaned_data <- df_clustered %>%
+  dplyr::select(cluster, where(is.numeric)) %>%
+  dplyr::mutate(across(-cluster, ~ (.x - min(.x, na.rm=TRUE))/(max(.x, na.rm=TRUE) - min(.x, na.rm=TRUE))))
+
+cleaned_data_long <- cleaned_data %>%
+  pivot_longer(
+    cols = -cluster,
+    names_to = "variable",
+    values_to = "value"
+  )
+
+#plotting
+ggplot(cleaned_data_long, aes(x = variable, y = value)) +
+  geom_line(aes(color = cluster), alpha = 0.3) +
+  geom_point(aes(color = cluster), size = 0.5) +
+  stat_summary(aes(group = cluster, color = cluster), 
+               fun = median, geom = "line", size = 1.5) +
+  scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+  scale_color_manual(values = c("red", "blue", "green")) +
+  labs(title = "Parallel Coordinates Plot of Country Clusters",
+       subtitle = "Thick lines represent cluster medians",
+       x = "Development Indicators",
+       y = "Standardized Value (0-100%)",
+       color = "Cluster") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom",
+        panel.grid.major.x = element_blank())
+
+#pairwise scatterplot colored by cluster
+model1_3 <- km_res 
+pairs(cluster_data, 
+      col = model1_3$cluster + 1, 
+      pch = 19, 
+      cex = 0.3,
+      main = "Pairwise Scatterplot Matrix Colored by Cluster (k = 3)")
+#country names listed by cluster
+split(df_clustered$country, df_clustered$cluster)
+
+#silhouette plot k=3
+sil <- silhouette(km_res$cluster, dist(cluster_data))
+avgsil <- mean(sil[, 3])
+cat("AVG silhouette width:", round(avgsil, 5))
+plot(sil, col = c("red", "green", "blue"))
+abline(v=avgsil, lty=2, col="black")
+
+#k=3 euclidean distance using pam in lib(cluster)
+model2 <- pam(cluster_data, k = 3)
+print(model2)
+
+#pairwise scatterplot for k=3 pam
+pairs(cluster_data,
+      col = model2$cluster + 1,
+      pch = 19,
+      cex = 0.3,
+      main = "K-medoids Clustering (k = 3) - Pairwise Scatterplot")
+
+#silhouette plot for k=3 pam euclidian distance
+sil <- silhouette(model2$cluster, dist(cluster_data))
+avgsil <- mean(sil[, 3])
+cat("AVG silhouette width:", round(avgsil, 5))
+plot(sil, col = c("red", "green", "blue"))
+abline(v = avgsil, lty = 2, col = "black")
+
+#plot for k medoids 
+fviz_cluster(model2, data = cluster_data,
+             ellipse.type = "norm",
+             palette = c("darkred", "darkgreen", "darkblue"),
+             ggtheme = theme_minimal(),
+             main = "K-medoids Clustering (k = 3)",
+             show.clust.cent = FALSE,
+             labelsize = 0)
+```
+
